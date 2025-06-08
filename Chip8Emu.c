@@ -219,9 +219,24 @@ void op_CXNN(uint8_t X, uint8_t NN) { //set register X to random number AND NN
     regs.V[X] = randomByte & NN; // AND with NN
 }
 
-void op_DXYN(uint8_t X, uint8_t Y, uint8_t N) { // draw sprite at (V[X], V[Y] corresponding to top left most pixel) with height N(top level, top level - N) 
-    
-}    
+void op_DXYN(uint8_t X, uint8_t Y, uint8_t N) { // draw sprite from address I at (V[X], V[Y] corresponding to top left most pixel) with height N(top level, top level - N) 
+    regs.V[0xF] = 0; //set register VF to 0 initially when no collision
+    for(int i = 0; i < N; i++){ //get each row of the sprite down to height top - N (sprites starts at lowest address)
+        uint8_t spriteRow = mainMemory[regs.I + i];
+        uint8_t posX = regs.V[X];
+        uint8_t posY = regs.V[Y];
+        for(int j = 0; j <= 7; j++ ){
+            uint8_t mask = 128 >> j; //mask to find each indiviual bit from byte row
+            uint8_t bit = (spriteRow & mask) >> (7-j); //value of each bit at specific position in the byte (starting from leftmost bit)
+            int newX = (posX + j) % 64; //wraparound X
+            int newY = (posY + i) % 32; //wraparound Y
+            if (bit == 1 && display[newX][newY] == 1){ //check if value would cause collision ie both bits result in 0 when XOR so when both bits 1 before the XOR
+                regs.V[0xF] = 1;
+            }
+            display[newX][newY] ^= bit; // DOUBLE CHECK SPEC: VF collision flag set before pixel is XOR'ed, to see if that's correct order
+    }
+} 
+}   
 
 void op_EX9E(uint8_t X) { // skip next instruction (skip memory address, +2 PC, skip 16 bits) if key with value of register X is pressed
     if (keys[regs.V[X]] == 1) { //key pressed if value is 1
