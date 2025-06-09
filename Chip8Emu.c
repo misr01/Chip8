@@ -3,14 +3,63 @@
 #include <stdint.h> //for unsignted ints
 #include <SDL2/SDL.h> //for graphics and input 
 
+void dumpBinaryToText(const char *inputFile, const char *outputFile) {
+    FILE *in = fopen(inputFile, "rb");
+    if (!in) {
+        printf("Failed to open input file.\n");
+        return;
+    }
+    FILE *out = fopen(outputFile, "w");
+    if (!out) {
+        printf("Failed to open output file.\n");
+        fclose(in);
+        return;
+    }
+
+    int byte, address = 0;
+    while ((byte = fgetc(in)) != EOF) {
+        fprintf(out, "%02X ", (unsigned char)byte);
+        address++;
+        if (address % 16 == 0) fprintf(out, "\n");
+    }
+    fprintf(out, "\n");
+    fclose(in);
+    fclose(out);
+}
 
 uint8_t mainMemory[4096]; // Main 4096 bytes of memory, each instruction is 2 bytes (16 bits, 2 addresses)
 uint16_t stack[16]; // Stack stores up to 16 return address 
 uint8_t display[64][32]; // Display 64x32 pixels
 uint8_t keys[16]; // Keypad with 16 keys (0x0 to 0xF)
 
+void loadROM(char *nameROM){ //read binary file (chip8 rom, containing instructions) into memory
+    FILE *rom = fopen(nameROM, "rb"); //read file in binary
+    if (rom == NULL) { //make sure rom exists
+        fprintf(stderr, "Failed to open ROM\n");
+        exit(1);
+}
+
+    fseek(rom, 0, SEEK_END); //go to end of file
+    long rom_size = ftell(rom); //get size of file
+    rewind(rom); //put poin ter back to start of file
+
+    if (rom_size > (4096 - 0x200)) { //make sure rom isn't bigger than memory
+        fprintf(stderr, "ROM too large to fit in memory\n");
+        fclose(rom);
+        exit(1);
+    }
+
+    fread(&mainMemory[0x200], 1, rom_size, rom);  //start at address of memory array, read 1 byte at a time, rom size amount of times (each instruction is a byte so size in bytes is no. of instructions), from rom file
+    fclose(rom);
+    
+}
+
+void playSound(){
+    printf("playing sound"); //will add real sound later
+}
+
 void handleKeyPress(SDL_Event *event) {
-    int is_pressed = (event->type == SDL_KEYDOWN) ? 1 : 0;
+    int is_pressed = (event->type == SDL_KEYDOWN) ? 1 : 0; 
     switch(event->key.keysym.sym) {
         case SDLK_1: keys[0x1] = is_pressed; break;
         case SDLK_2: keys[0x2] = is_pressed; break;
@@ -438,3 +487,75 @@ void decode(uint16_t opcode) {
         }
     }
 }
+
+void fetchDecodeExecute(){
+    uint16_t instruction = (mainMemory[regs.PC] << 8) | mainMemory[regs.PC + 1]; //fetch each 8 bit half of instruction and concatanate, big Endian for instructions
+    regs.PC += 2; //set PC to next sequential instruction, executed instruction can change this potentially
+    decode(instruction); //decode into opcode and operand and execute
+}
+
+void drawDisplay(SDL_Renderer *renderer){
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); //black pixels
+    SDL_RenderClear(renderer); //turn screen to black
+
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255); //white pixels
+    for (int y = 0; y < 32; y++) { //width 32 pixels, loop through display array and set white pixels when == 1
+        for (int x = 0; x < 64; x++) { //height 64 pixels
+            if (display[x][y] == 1) { //if display array set to 1 at that position, draw a white square (pixel) there
+                SDL_Rect rect = { x * 10, y * 10, 10, 10 }; //pixels are 10x10 window pixels squares
+                SDL_RenderFillRect(renderer, &rect);
+            }
+        }
+    }
+    SDL_RenderPresent(renderer); //update window with everything drawn since renderclear (white pixel)
+}
+
+int main(int argc, char *argv[]){ //for SDL
+    dumpBinaryToText("Play.ch8", "Play_dump.txt"); //view game binary
+    initialiseSystem(); //initalise memory/registers etc
+    loadROM("Play.ch8"); //loads rom Play.ch8 into memory
+
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 320, 0); //window width and height 640x320, 10x10 window to chip8 pixel
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED); //default driver gpu accelerated if possible
+
+    uint32_t last_time = SDL_GetTicks(); //initalise time since SDL library initialised
+    uint32_t timer_accumulator = 0; //initialise timer to track real time between loops
+
+    SDL_Event event; //stores input/quit events
+    int open = 1;
+    while (open) {
+        while (SDL_PollEvent(&event)) { //Check if user quit or not
+            if (event.type == SDL_QUIT) open = 0; //SDL_QUIT is close window button
+            handleKeyPress(&event); // check user input and update keys array accordingly 
+        }
+
+        for (int i = 0; i < 10; i++) { //how many chip8 instructions happen per frame, 10 in this case
+            fetchDecodeExecute();  
+        }
+
+        uint32_t now = SDL_GetTicks(); //current time
+        timer_accumulator += now - last_time; //amount of time since last time, keeps adding on to know how many times to decrement timer e.g. 35 ms elapsed since last loop then 35 > 16.67 * 2 so decrement timers twice
+        last_time = now; //update last time for next loop
+        while (timer_accumulator >= 1000 / 60) { //1000/60 = 16 ms (60fps roughly)  once 16 or greater elapsed since last frame then decrement timers
+            if (regs.DT > 0) regs.DT--; //decrement delay timer by 1
+            if (regs.ST > 0){ 
+                regs.ST--; // decrement sound timer by 1
+                playSound(); //not actually implemented yet
+            }
+            timer_accumulator -= 1000 / 60; //remove 16.67ms from accumulator since timers have been decremented for that time period
+        }
+
+        // 4. Render display
+        drawDisplay(renderer);
+
+        SDL_Delay(1000/60); //60 fps
+
+    }
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return 0;
+}
+
