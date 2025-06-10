@@ -26,6 +26,11 @@ void dumpBinaryToText(const char *inputFile, const char *outputFile) {
     fclose(in);
     fclose(out);
 }
+// https://github.com/mattmikolay/chip-8/wiki/CHIP%E2%80%908-Instruction-Set#notes, followed for Original behaviour, quirks are based on behaviour from other sources such as CowGod technical reference for chip8
+int loadStoreRegQuirk = 0; //flag for register I should be incremented by X + 1 (if 0) or not incremented at all (if non 0)                                                       
+int spriteWrapClipQuirk = 0; //flag for if partially drawn sprites wrap around (if 0) or get clipped (non 0), sprites drawn completely 
+int bitShiftQuirk = 0; //flag for if 8XY6 and 8XYE should use register  VX and VY (0) or VX only (non 0)
+
 
 uint8_t mainMemory[4096]; // Main 4096 bytes of memory, each instruction is 2 bytes (16 bits, 2 addresses)
 uint16_t stack[16]; // Stack stores up to 16 return address 
@@ -123,7 +128,7 @@ void initialiseSystem() { //set all default values and sprites
         0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
         0xF0, 0x10, 0x20, 0x40, 0x40, //7
         0xF0, 0x90, 0xF0, 0x90, 0xF0, //8
-        0xF1, 0x90, 0xF0, 0x10, 0xF0, //9
+        0xF0, 0x90, 0xF0, 0x10, 0xF0, //9
         0xF0, 0x90, 0xF0, 0x90, 0x90, // A
         0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
         0xF0, 0x80, 0x80, 0x80, 0xF0, // C
@@ -230,9 +235,15 @@ void op_8XY5(uint8_t X, uint8_t Y) { //subtract register Y from register X, set 
     regs.V[X] -= regs.V[Y];
 }
 
-void op_8XY6(uint8_t X, uint8_t Y) { //register X = register Y >> 1, set VF to least significant bit of register Y
-    regs.V[0xF] = regs.V[Y] & 0x01; //set VF to least significant bit
-    regs.V[X] = regs.V[Y] >> 1; //shift right by 1
+void op_8XY6(uint8_t X, uint8_t Y) { //based on if bitShiftQuirk set to 0 or non 0
+    if (bitShiftQuirk == 0) { //register X = register Y >> 1, set VF to least significant bit of register Y, bitShiftQuirk= 0
+        regs.V[0xF] = regs.V[X] & 0x01; //set VF to least significant bit of VX
+        regs.V[X] = regs.V[X] >> 1; //set VX to VX shifted right by 1
+    }
+    else { //register X = register X >> 1, set VF to least significant bit of register X, bitShiftQuirk = non 0
+        regs.V[0xF] = regs.V[Y] & 0x01; //set VF to least significant bit of VY
+        regs.V[X] = regs.V[Y] >> 1; //set VX to VY shifted right by 1
+    }
 }
 
 void op_8XY7(uint8_t X, uint8_t Y) { //set register X to register Y - register X, set VF to 1 if no borrow, 0 if borrow
@@ -244,9 +255,15 @@ void op_8XY7(uint8_t X, uint8_t Y) { //set register X to register Y - register X
     regs.V[X] = regs.V[Y] - regs.V[X];
 }
 
-void op_8XYE(uint8_t X, uint8_t Y) { //register X = register Y << 1, set VF to most significant bit of register Y
-    regs.V[0xF] = regs.V[Y] >> 7; //set VF to most significant bit
-    regs.V[X] = regs.V[Y] << 1; //shift left by 1
+void op_8XYE(uint8_t X, uint8_t Y) { //based on if bitShiftQuirk set to 0 or non 0
+    if(bitShiftQuirk == 0){ //register X = register Y << 1, set VF to most significant bit of register Y, bitShiftQuirk - 0
+    regs.V[0xF] = regs.V[Y] >> 7; //set VF to most significant bit of VY
+    regs.V[X] = regs.V[Y] << 1; //set VX to VY shift left by 1
+    }
+    else{ //register X = register X << 1, set VF to most significant bit of register X, bitShiftQuirk = non 0
+        regs.V[0xF] = regs.V[X] >> 7; //set VF to most significant bit of VX
+    regs.V[X] = regs.V[X] << 1; //shift VX left by 1
+    }
 }
 
 void op_9XY0(uint8_t X, uint8_t Y) { //skip next instruction (skip memory address, +2 PC, skip 16 bits) if register X does not equal register Y
@@ -272,21 +289,39 @@ void op_DXYN(uint8_t X, uint8_t Y, uint8_t N) { // draw sprite from address I at
     regs.V[0xF] = 0; //set register VF to 0 initially when no collision
     for(int i = 0; i < N; i++){ //get each row of the sprite down to height top - N (sprites starts at lowest address)
         uint8_t spriteRow = mainMemory[regs.I + i];
-        uint8_t posX = regs.V[X];
-        uint8_t posY = regs.V[Y];
-        for(int j = 0; j <= 7; j++ ){
-            uint8_t mask = 128 >> j; //mask to find each indiviual bit from byte row
-            uint8_t bit = (spriteRow & mask) >> (7-j); //value of each bit at specific position in the byte (starting from leftmost bit)
-            int newX = (posX + j) % 64; //wraparound X
-            int newY = (posY + i) % 32; //wraparound Y
-            if (bit == 1 && display[newX][newY] == 1){ //check if value would cause collision ie both bits result in 0 when XOR so when both bits 1 before the XOR
+
+        //first bit always on screen somewhere
+        int firstX = regs.V[X] % 64; //wraparound X if needed for initial X coord
+        int firstY = regs.V[Y] % 32; //wraparound Y if needed for initial Y coord
+        uint8_t firstBit = (spriteRow >> 7);
+        if (firstBit == 1 && display[firstX][firstY] == 1){ //check if value would cause collision ie both bits result in 0 when XOR so when both bits 1 before the XOR
                 regs.V[0xF] = 1;
             }
-            display[newX][newY] ^= bit; // DOUBLE CHECK SPEC: VF collision flag set before pixel is XOR'ed, to see if that's correct order
+        display[firstX][firstY] ^= firstBit;
+
+        //non first bits either wrapped around or clipped depending on spriteWrapClipQuirk value
+        for(int j = 1; j <= 7; j++ ){
+            int currentX = firstX + j;
+            int currentY = firstY + i;
+
+            if(spriteWrapClipQuirk != 0 && (currentX > 63 | currentY > 31)){ //clip sprite if spriteWrapClipQuirk != 0
+                continue; //do nothing since clipped
+            }
+            //if pixel doesn't clip or clip quirk = 0
+            int currentX = currentX % 64; //wraparound if needed 
+            int currentY = currentY % 32; //wraparound if needed
+            uint8_t mask = 128 >> j; //mask to find each indiviual bit from byte row
+            uint8_t bit = (spriteRow & mask) >> (7-j); //value of each bit at specific position in the byte (starting from leftmost bit)
+            if (bit == 1 && display[currentX][currentY] == 1){ //check if value would cause collision ie both bits result in 0 when XOR so when both bits 1 before the XOR
+                regs.V[0xF] = 1;
+            }
+            display[currentX][currentY] ^= bit; //current display bit XOR with new bit and update display with result
+            // DOUBLE CHECK SPEC: VF collision flag set before pixel is XOR'ed, to see if that's correct order
+        }
+
     }
 } 
-}   
-
+   
 void op_EX9E(uint8_t X) { // skip next instruction (skip memory address, +2 PC, skip 16 bits) if key with value of register X is pressed
     if (keys[regs.V[X]] == 1) { //key pressed if value is 1
         regs.PC += 2;
@@ -348,14 +383,19 @@ void op_FX55(uint8_t X) { // store registers V0 to VX inclusive in memory starti
     for (int i = 0; i <= X; i++) {
         mainMemory[regs.I + i] = regs.V[i];
     }
-    regs.I += X + 1; // increment I by X + 1 after
+    if(loadStoreRegQuirk == 0){
+        regs.I += X + 1; // increment I by X + 1 after
+    } //if loadStoreRegQuirk == 0 then set reg I to I+X+1 after, otherwise reg I stays the same after the instruction if loadStoreRegQuirk == non 0
 }
 
 void op_FX65(uint8_t X) { // read registers V0 to VX inclusive from memory starting at address I
     for (int i = 0; i <= X; i++) {
         regs.V[i] = mainMemory[regs.I + i];
     }
-    regs.I += X + 1; // increment I by X + 1 after
+    if(loadStoreRegQuirk == 0){
+        regs.I += X + 1; // increment I by X + 1 after
+    } //if loadStoreRegQuirk == 0 then set reg I to I+X+1 after, otherwise reg I stays the same after the instruction if loadStoreRegQuirk == non 0
+
 }
 
 void decode(uint16_t opcode) {
@@ -416,12 +456,12 @@ void decode(uint16_t opcode) {
                 op_8XY4(X, Y);
             } else if (N == 5) {
                 op_8XY5(X, Y);
-            } else if (N == 6) {
+            } else if (N == 6) { //bitShiftQuirk handled inside actual instruction
                 op_8XY6(X,Y);
             } else if (N == 7) {
                 op_8XY7(X, Y);
-            } else if (N == 0xE) {
-                op_8XYE(X, Y);
+            } else if (N == 0xE) { //bitShiftQuirk handled inside actual instruction
+                op_8XYEF(X, Y);
             } else {
                 printf("Unknown opcode: 0x%04X\n", opcode);
             }
@@ -444,7 +484,7 @@ void decode(uint16_t opcode) {
             break;
         }
         case 0xD: {
-            op_DXYN(X, Y, N);
+            op_DXYN(X, Y, N); // clip or wrap Quirk handled in instruction
             break;
         }
         case 0xE: {
@@ -472,9 +512,9 @@ void decode(uint16_t opcode) {
                 op_FX29(X);
             } else if (NN == 0x33) {
                 op_FX33(X);
-            } else if (NN == 0x55) {
+            } else if (NN == 0x55) { //loadStoreRegQuirk handled inside instruction
                 op_FX55(X);
-            } else if (NN == 0x65) {
+            } else if (NN == 0x65) { //loadStoreRegQuirk handled inside instruction
                 op_FX65(X);
             } else {
                 printf("Unknown opcode: 0x%04X\n", opcode);
@@ -509,6 +549,7 @@ void drawDisplay(SDL_Renderer *renderer){
     }
     SDL_RenderPresent(renderer); //update window with everything drawn since renderclear (white pixel)
 }
+
 
 int main(int argc, char *argv[]){ //for SDL
     dumpBinaryToText("Play.ch8", "Play_dump.txt"); //view game binary
@@ -558,4 +599,3 @@ int main(int argc, char *argv[]){ //for SDL
     SDL_Quit();
     return 0;
 }
-
