@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h> //for unsignted ints
-#include <SDL2/SDL.h> //for graphics and input 
+#define SDL_MAIN_HANDLED
+#include <SDL2/SDL.h> //for graphics and input of the game
+#include <SDL2/SDL_ttf.h> //for drawing text for displaying register etc values next to game
 
 void dumpBinaryToText(const char *inputFile, const char *outputFile) {
     FILE *in = fopen(inputFile, "rb");
@@ -287,29 +289,24 @@ void op_CXNN(uint8_t X, uint8_t NN) { //set register X to random number AND NN
 
 void op_DXYN(uint8_t X, uint8_t Y, uint8_t N) { // draw sprite from address I at (V[X], V[Y] corresponding to top left most pixel) with height N(top level, top level - N) 
     regs.V[0xF] = 0; //set register VF to 0 initially when no collision
-    for(int i = 0; i < N; i++){ //get each row of the sprite down to height top - N (sprites starts at lowest address)
-        uint8_t spriteRow = mainMemory[regs.I + i];
+    //first bit always on screen somewhere
+    int firstX = regs.V[X] % 64; //wraparound X if needed for initial X coord
+    int firstY = regs.V[Y] % 32; //wraparound Y if needed for initial Y coord
 
-        //first bit always on screen somewhere
-        int firstX = regs.V[X] % 64; //wraparound X if needed for initial X coord
-        int firstY = regs.V[Y] % 32; //wraparound Y if needed for initial Y coord
-        uint8_t firstBit = (spriteRow >> 7);
-        if (firstBit == 1 && display[firstX][firstY] == 1){ //check if value would cause collision ie both bits result in 0 when XOR so when both bits 1 before the XOR
-                regs.V[0xF] = 1;
-            }
-        display[firstX][firstY] ^= firstBit;
+    for(int i = 0; i < N; i++){ //get each row of the sprite down to height top - N (sprites starts at lowest address)
+        uint8_t spriteRow = mainMemory[regs.I + i]; //get row of bits for that column
 
         //non first bits either wrapped around or clipped depending on spriteWrapClipQuirk value
-        for(int j = 1; j <= 7; j++ ){
+        for(int j = 0; j <= 7; j++ ){
             int currentX = firstX + j;
             int currentY = firstY + i;
 
-            if(spriteWrapClipQuirk != 0 && (currentX > 63 | currentY > 31)){ //clip sprite if spriteWrapClipQuirk != 0
+            if(spriteWrapClipQuirk != 0 && (currentX > 63 || currentY > 31) && (j != 0 && i != 0)){ //clip sprite if spriteWrapClipQuirk != 0
                 continue; //do nothing since clipped
             }
             //if pixel doesn't clip or clip quirk = 0
-            int currentX = currentX % 64; //wraparound if needed 
-            int currentY = currentY % 32; //wraparound if needed
+            currentX = (firstX + j) % 64; //wraparound if needed 
+            currentY = (firstY + i) % 32; //wraparound if needed
             uint8_t mask = 128 >> j; //mask to find each indiviual bit from byte row
             uint8_t bit = (spriteRow & mask) >> (7-j); //value of each bit at specific position in the byte (starting from leftmost bit)
             if (bit == 1 && display[currentX][currentY] == 1){ //check if value would cause collision ie both bits result in 0 when XOR so when both bits 1 before the XOR
@@ -461,7 +458,7 @@ void decode(uint16_t opcode) {
             } else if (N == 7) {
                 op_8XY7(X, Y);
             } else if (N == 0xE) { //bitShiftQuirk handled inside actual instruction
-                op_8XYEF(X, Y);
+                op_8XYE(X, Y);
             } else {
                 printf("Unknown opcode: 0x%04X\n", opcode);
             }
@@ -547,17 +544,33 @@ void drawDisplay(SDL_Renderer *renderer){
             }
         }
     }
-    SDL_RenderPresent(renderer); //update window with everything drawn since renderclear (white pixel)
 }
 
+void drawText(SDL_Renderer *renderer, TTF_Font *font, int x, int y, const char *text, SDL_Color color) { //drawing text on screen
+    SDL_Surface *surface = TTF_RenderText_Solid(font, text, color);
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_Rect dst = { x, y, surface->w, surface->h };
+    SDL_RenderCopy(renderer, texture, NULL, &dst);
+    SDL_FreeSurface(surface);
+    SDL_DestroyTexture(texture);
+}
 
 int main(int argc, char *argv[]){ //for SDL
     dumpBinaryToText("Play.ch8", "Play_dump.txt"); //view game binary
     initialiseSystem(); //initalise memory/registers etc
     loadROM("Play.ch8"); //loads rom Play.ch8 into memory
 
-    SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window *window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 320, 0); //window width and height 640x320, 10x10 window to chip8 pixel
+    SDL_Init(SDL_INIT_VIDEO); //for SDL TTF errors
+    if (TTF_Init() == -1) {
+    printf("TTF_Init: %s\n", TTF_GetError());
+    exit(1);
+    }
+    TTF_Font *font = TTF_OpenFont("arial.ttf", 16);
+    if (!font) {
+        printf("Failed to load font: %s\n", TTF_GetError());
+        exit(1);
+    }
+    SDL_Window *window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 900, 520, 0); //window width and height 640x320, 10x10 window to chip8 pixel
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED); //default driver gpu accelerated if possible
 
     uint32_t last_time = SDL_GetTicks(); //initalise time since SDL library initialised
@@ -589,6 +602,41 @@ int main(int argc, char *argv[]){ //for SDL
 
         // 4. Render display
         drawDisplay(renderer);
+        SDL_Color white = {255,255,255,255};
+        char buf[128];
+
+        // Registers
+        for (int i = 0; i < 16; i++) {
+            sprintf(buf, "V%X: %02X", i, regs.V[i]);
+            drawText(renderer, font, 650, 10 + i * 20, buf, white);
+        }
+        sprintf(buf, "I: %04X", regs.I); drawText(renderer, font, 650, 340, buf, white);
+        sprintf(buf, "PC: %04X", regs.PC); drawText(renderer, font, 650, 360, buf, white);
+        sprintf(buf, "SP: %02X", regs.SP); drawText(renderer, font, 650, 380, buf, white);
+        sprintf(buf, "DT: %02X", regs.DT); drawText(renderer, font, 650, 400, buf, white);
+        sprintf(buf, "ST: %02X", regs.ST); drawText(renderer, font, 650, 420, buf, white);
+
+        // Stack
+        for (int i = 0; i < 16; i++) {
+            sprintf(buf, "S%X: %04X", i, stack[i]);
+            drawText(renderer, font, 750, 10 + i * 20, buf, white);
+        }
+
+        // Keys
+        for (int i = 0; i < 16; i++) {
+            sprintf(buf, "K%X: %d", i, keys[i]);
+            drawText(renderer, font, 850, 10 + i * 20, buf, white);
+        }
+
+        // Quirk flags
+        sprintf(buf, "loadStoreRegQuirk: %d", loadStoreRegQuirk);
+        drawText(renderer, font, 650, 460, buf, white);
+        sprintf(buf, "spriteWrapClipQuirk: %d", spriteWrapClipQuirk);
+        drawText(renderer, font, 650, 480, buf, white);
+        sprintf(buf, "bitShiftQuirk: %d", bitShiftQuirk);
+        drawText(renderer, font, 650, 500, buf, white);
+
+        SDL_RenderPresent(renderer); //update window with everything drawn since renderclear (white pixel)
 
         SDL_Delay(1000/60); //60 fps
 
