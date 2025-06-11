@@ -15,5 +15,6 @@ To play other ROMs not named Play.ch8, once opened using Play.ch8 click the LOAD
 IPF changer button, waits for integer to be entered in console to change the amount of instructions per frame (roughly 60fps).
 
 Make sure arial.ttf is in the same folder as the executable.
+Need SDL2.dll , SDL2_ttf.dll , zlib1.dll, freetype.dll in the same folder, will include later
 
 Compile: $ gcc Chip8Emu.c -o Chip8Emu -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf
