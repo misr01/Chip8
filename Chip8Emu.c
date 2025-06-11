@@ -65,6 +65,9 @@ void playSound(){
     printf("playing sound"); //will add real sound later
 }
 
+int pause = 0; //flag for pausing
+int step = 0; //flag for if step was pressed
+
 void handleKeyPress(SDL_Event *event) {
     int is_pressed = (event->type == SDL_KEYDOWN) ? 1 : 0; 
     switch(event->key.keysym.sym) {
@@ -84,6 +87,12 @@ void handleKeyPress(SDL_Event *event) {
         case SDLK_x: keys[0x0] = is_pressed; break;
         case SDLK_c: keys[0xB] = is_pressed; break;
         case SDLK_v: keys[0xF] = is_pressed; break;
+        case SDLK_SPACE:
+            if (is_pressed) pause = !pause; //for pausing  
+            break;
+        case SDLK_n:
+            if (is_pressed && pause) step = 1; //set step to 1 if paused
+            break;
     }
 }
  
@@ -530,8 +539,11 @@ void decode(uint16_t opcode) {
     }
 }
 
+uint16_t lastInstruction = 0; //for tracking last instruction 
+
 void fetchDecodeExecute(){
     uint16_t instruction = (mainMemory[regs.PC] << 8) | mainMemory[regs.PC + 1]; //fetch each 8 bit half of instruction and concatanate, big Endian for instructions
+    lastInstruction = instruction; // store current instruction
     regs.PC += 2; //set PC to next sequential instruction, executed instruction can change this potentially
     decode(instruction); //decode into opcode and operand and execute
 }
@@ -587,6 +599,23 @@ int drawButton(SDL_Renderer *renderer, int x, int y, int w, int h, const char *l
     return 0;
 }
 
+void drawMemoryHex(SDL_Renderer *renderer, TTF_Font *font) {
+    SDL_Color gray = {180, 180, 180, 255};
+    char line[64];
+    int lines = 32; // mumber of lines to show 
+    int bytesPerLine = 8; // how many bytes shown on every line
+
+    for (int i = 0; i < lines; i++) {
+        int addr = 0x200 + i * bytesPerLine;
+        if (addr >= 4096) break;
+        int len = snprintf(line, sizeof(line), "%03X: ", addr);
+        for (int j = 0; j < bytesPerLine && (addr + j) < 4096; j++) {
+            len += snprintf(line + len, sizeof(line) - len, "%02X ", mainMemory[addr + j]);
+        }
+        drawText(renderer, font, 10, 10 + i * 18, line, gray);
+    }
+}
+
 int main(int argc, char *argv[]){ //for SDL
     dumpBinaryToText("Play.ch8", "Play_dump.txt"); //view game binary
     initialiseSystem(); //initalise memory/registers etc
@@ -597,7 +626,7 @@ int main(int argc, char *argv[]){ //for SDL
     printf("TTF_Init: %s\n", TTF_GetError());
     exit(1);
     }
-    TTF_Font *font = TTF_OpenFont("arial.ttf", 16);
+    TTF_Font *font = TTF_OpenFont("arial.ttf", 16); //need arial.ttf in same folder
     if (!font) {
         printf("Failed to load font: %s\n", TTF_GetError());
         exit(1);
@@ -609,6 +638,7 @@ int main(int argc, char *argv[]){ //for SDL
     uint32_t timer_accumulator = 0; //initialise timer to track real time between loops
 
     SDL_Event event; //stores input/quit events
+    int IPF = 10;
     int open = 1;
     while (open) {
         while (SDL_PollEvent(&event)) { //Check if user quit or not
@@ -616,8 +646,14 @@ int main(int argc, char *argv[]){ //for SDL
             handleKeyPress(&event); // check user input and update keys array accordingly 
         }
 
-        for (int i = 0; i < 10; i++) { //how many chip8 instructions happen per frame, 10 in this case
-            fetchDecodeExecute();  
+        for (int i = 0; i < IPF; i++) { //how many chip8 instructions happen per frame, controlled by IPF value set
+            if (!pause || step) {
+                fetchDecodeExecute();
+                if (pause) {
+                    step = 0; // set step back to 0 and break loop so only one instruction executed
+                    break;  
+        }
+            }
         }
 
         uint32_t now = SDL_GetTicks(); //current time
@@ -634,12 +670,19 @@ int main(int argc, char *argv[]){ //for SDL
 
         // 4. Render display
         drawDisplay(renderer);
+        // drawMemoryHex(renderer, font); //Showing ROM instructions in hex (disabled for now, too long)
+
         SDL_Color white = {255,255,255,255};
+
+        drawText(renderer, font, 300, 520, "Pause: spc Step: n", white);
+        if (pause) { //show paused if paused
+            drawText(renderer, font, 570, 520, "PAUSED", white);
+}
         char buf[128];
 
         // Registers
         for (int i = 0; i < 16; i++) {
-            sprintf(buf, "V%X: %02X", i, regs.V[i]);
+            sprintf(buf, "V%X: %02X", i, regs.V[i]); //put register values into buf char array and then put on screen using drawText
             drawText(renderer, font, 650, 10 + i * 20, buf, white);
         }
         sprintf(buf, "I: %04X", regs.I); drawText(renderer, font, 650, 340, buf, white);
@@ -647,6 +690,14 @@ int main(int argc, char *argv[]){ //for SDL
         sprintf(buf, "SP: %02X", regs.SP); drawText(renderer, font, 650, 380, buf, white);
         sprintf(buf, "DT: %02X", regs.DT); drawText(renderer, font, 650, 400, buf, white);
         sprintf(buf, "ST: %02X", regs.ST); drawText(renderer, font, 650, 420, buf, white);
+
+        //Last Instruction
+        sprintf(buf, "Instr: %04X", lastInstruction); 
+        drawText(renderer, font, 650, 440, buf, white);
+
+        //IPF
+        sprintf(buf, "IPF: %d", IPF); 
+        drawText(renderer, font, 500, 440, buf, white);
 
         // Stack
         for (int i = 0; i < 16; i++) {
@@ -686,18 +737,30 @@ int main(int argc, char *argv[]){ //for SDL
 
         // Draw "Load ROM" button
         if (drawButton(renderer, 650, 520, 120, 30, "Load ROM", mouseX, mouseY, mouseDown, font)) {
-            char filename[256];
+            char filename[256]; //for storing filename
             printf("Enter ROM filename: ");
             fflush(stdout);
-            if (scanf("%255s", filename) == 1) {
+            if (scanf("%255s", filename) == 1) { //read string up to 255 bytes, put into filename array if it read a string (==1) then try load the rom
                 initialiseSystem();
                 loadROM(filename);
             }
         }
 
+        // Draw "IPF" button
+        if (drawButton(renderer, 450, 520, 120, 30, "IPF", mouseX, mouseY, mouseDown, font)) {
+            printf("Enter an integer for IPF (default 10 at 60fps): ");
+            fflush(stdout); // Ensure prompt is shown before input
+            if (scanf("%d", &IPF) == 1) {
+                printf("You entered: %d\n", IPF); //currently not guarded for invalid input, fix later
+            } else {
+                printf("Invalid input!\n");
+            }
+        }
+
+        
         SDL_RenderPresent(renderer); //update window with everything drawn since renderclear (white pixel)
 
-        SDL_Delay(1000/60); //60 fps
+        SDL_Delay(1000/63); //60 fps (made slightly higher since a lot of overhead due to drawing many things now)
 
     }
 
