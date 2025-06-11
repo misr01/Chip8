@@ -239,12 +239,12 @@ void op_8XY5(uint8_t X, uint8_t Y) { //subtract register Y from register X, set 
 
 void op_8XY6(uint8_t X, uint8_t Y) { //based on if bitShiftQuirk set to 0 or non 0
     if (bitShiftQuirk == 0) { //register X = register Y >> 1, set VF to least significant bit of register Y, bitShiftQuirk= 0
-        regs.V[0xF] = regs.V[X] & 0x01; //set VF to least significant bit of VX
-        regs.V[X] = regs.V[X] >> 1; //set VX to VX shifted right by 1
-    }
-    else { //register X = register X >> 1, set VF to least significant bit of register X, bitShiftQuirk = non 0
         regs.V[0xF] = regs.V[Y] & 0x01; //set VF to least significant bit of VY
         regs.V[X] = regs.V[Y] >> 1; //set VX to VY shifted right by 1
+    }
+    else { //register X = register X >> 1, set VF to least significant bit of register X, bitShiftQuirk = non 0
+        regs.V[0xF] = regs.V[X] & 0x01; //set VF to least significant bit of VX
+        regs.V[X] = regs.V[X] >> 1; //set VX to VX shifted right by 1
     }
 }
 
@@ -259,12 +259,12 @@ void op_8XY7(uint8_t X, uint8_t Y) { //set register X to register Y - register X
 
 void op_8XYE(uint8_t X, uint8_t Y) { //based on if bitShiftQuirk set to 0 or non 0
     if(bitShiftQuirk == 0){ //register X = register Y << 1, set VF to most significant bit of register Y, bitShiftQuirk - 0
-    regs.V[0xF] = regs.V[Y] >> 7; //set VF to most significant bit of VY
-    regs.V[X] = regs.V[Y] << 1; //set VX to VY shift left by 1
+        regs.V[0xF] = regs.V[Y] >> 7; //set VF to most significant bit of VY
+        regs.V[X] = regs.V[Y] << 1; //set VX to VY shift left by 1
     }
     else{ //register X = register X << 1, set VF to most significant bit of register X, bitShiftQuirk = non 0
         regs.V[0xF] = regs.V[X] >> 7; //set VF to most significant bit of VX
-    regs.V[X] = regs.V[X] << 1; //shift VX left by 1
+        regs.V[X] = regs.V[X] << 1; //shift VX left by 1
     }
 }
 
@@ -301,7 +301,7 @@ void op_DXYN(uint8_t X, uint8_t Y, uint8_t N) { // draw sprite from address I at
             int currentX = firstX + j;
             int currentY = firstY + i;
 
-            if(spriteWrapClipQuirk != 0 && (currentX > 63 || currentY > 31) && (j != 0 && i != 0)){ //clip sprite if spriteWrapClipQuirk != 0
+            if(spriteWrapClipQuirk != 0 && (currentX > 63 || currentY > 31) && (j != 0 || i != 0)){ //clip sprite if spriteWrapClipQuirk != 0
                 continue; //do nothing since clipped
             }
             //if pixel doesn't clip or clip quirk = 0
@@ -431,7 +431,8 @@ void decode(uint16_t opcode) {
             break;
         }
         case 0x5: {
-            op_5XY0(X,Y);
+            if (N == 0) op_5XY0(X, Y);
+            else printf("Unknown opcode: 0x%04X\n", opcode);
             break;
         }
         case 0x6: {
@@ -443,7 +444,10 @@ void decode(uint16_t opcode) {
             break;
         }
         case 0x8: {
-            if (N == 1) {
+            if (N == 0) {
+                op_8XY0(X, Y);
+            }
+            else if (N == 1) {
                 op_8XY1(X, Y);
             } else if (N == 2) {
                 op_8XY2(X, Y);
@@ -465,7 +469,8 @@ void decode(uint16_t opcode) {
             break;
         }
         case 0x9: {
-            op_9XY0(X, Y);
+            if (N == 0) op_9XY0(X, Y);
+            else printf("Unknown opcode: 0x%04X\n", opcode);
             break;
         }
         case 0xA: {
@@ -555,6 +560,33 @@ void drawText(SDL_Renderer *renderer, TTF_Font *font, int x, int y, const char *
     SDL_DestroyTexture(texture);
 }
 
+int drawCheckbox(SDL_Renderer *renderer, int x, int y, int checked, int mouseX, int mouseY, int mouseDown) {
+    SDL_Rect box = {x, y, 16, 16};
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &box);
+    if (checked) {
+        SDL_SetRenderDrawColor(renderer, 0, 200, 0, 255);
+        SDL_Rect fill = {x+3, y+3, 10, 10};
+        SDL_RenderFillRect(renderer, &fill);
+    }
+    // If mouse is down and inside box, return 1
+    if (mouseDown && mouseX >= x && mouseX <= x+16 && mouseY >= y && mouseY <= y+16)
+        return 1;
+    return 0;
+}
+
+int drawButton(SDL_Renderer *renderer, int x, int y, int w, int h, const char *label, int mouseX, int mouseY, int mouseDown, TTF_Font *font) {
+    SDL_SetRenderDrawColor(renderer, 70, 70, 200, 255);
+    SDL_Rect rect = {x, y, w, h};
+    SDL_RenderFillRect(renderer, &rect);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderDrawRect(renderer, &rect);
+    drawText(renderer, font, x + 10, y + 5, label, (SDL_Color){255,255,255,255});
+    if (mouseDown && mouseX >= x && mouseX <= x+w && mouseY >= y && mouseY <= y+h)
+        return 1;
+    return 0;
+}
+
 int main(int argc, char *argv[]){ //for SDL
     dumpBinaryToText("Play.ch8", "Play_dump.txt"); //view game binary
     initialiseSystem(); //initalise memory/registers etc
@@ -570,7 +602,7 @@ int main(int argc, char *argv[]){ //for SDL
         printf("Failed to load font: %s\n", TTF_GetError());
         exit(1);
     }
-    SDL_Window *window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 900, 520, 0); //window width and height 640x320, 10x10 window to chip8 pixel
+    SDL_Window *window = SDL_CreateWindow("CHIP-8", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 900, 560, 0); //window width and height 640x320, 10x10 window to chip8 pixel
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED); //default driver gpu accelerated if possible
 
     uint32_t last_time = SDL_GetTicks(); //initalise time since SDL library initialised
@@ -635,6 +667,33 @@ int main(int argc, char *argv[]){ //for SDL
         drawText(renderer, font, 650, 480, buf, white);
         sprintf(buf, "bitShiftQuirk: %d", bitShiftQuirk);
         drawText(renderer, font, 650, 500, buf, white);
+
+        // Get mouse state
+        int mouseX, mouseY;
+        Uint32 mouseState = SDL_GetMouseState(&mouseX, &mouseY);
+        int mouseDown = mouseState & SDL_BUTTON(SDL_BUTTON_LEFT);
+
+        // Draw checkboxes and toggle quirks if clicked
+        if (drawCheckbox(renderer, 820, 460, loadStoreRegQuirk, mouseX, mouseY, mouseDown)) {
+            loadStoreRegQuirk = !loadStoreRegQuirk;
+        }
+        if (drawCheckbox(renderer, 820, 480, spriteWrapClipQuirk, mouseX, mouseY, mouseDown)) {
+            spriteWrapClipQuirk = !spriteWrapClipQuirk;
+        }
+        if (drawCheckbox(renderer, 820, 500, bitShiftQuirk, mouseX, mouseY, mouseDown)) {
+            bitShiftQuirk = !bitShiftQuirk;
+        }
+
+        // Draw "Load ROM" button
+        if (drawButton(renderer, 650, 520, 120, 30, "Load ROM", mouseX, mouseY, mouseDown, font)) {
+            char filename[256];
+            printf("Enter ROM filename: ");
+            fflush(stdout);
+            if (scanf("%255s", filename) == 1) {
+                initialiseSystem();
+                loadROM(filename);
+            }
+        }
 
         SDL_RenderPresent(renderer); //update window with everything drawn since renderclear (white pixel)
 
