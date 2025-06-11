@@ -660,13 +660,15 @@ int main(int argc, char *argv[]){ //for SDL
         timer_accumulator += now - last_time; //amount of time since last time, keeps adding on to know how many times to decrement timer e.g. 35 ms elapsed since last loop then 35 > 16.67 * 2 so decrement timers twice
         last_time = now; //update last time for next loop
         while (timer_accumulator >= 1000 / 60) { //1000/60 = 16 ms (60fps roughly)  once 16 or greater elapsed since last frame then decrement timers
-            if (regs.DT > 0) regs.DT--; //decrement delay timer by 1
-            if (regs.ST > 0){ 
-                regs.ST--; // decrement sound timer by 1
-                playSound(); //not actually implemented yet
-            }
+            if (!pause) { // only decrement timers if not paused
+                if (regs.DT > 0) regs.DT--; //decrement delay timer by 1
+                if (regs.ST > 0){ 
+                    regs.ST--; // decrement sound timer by 1
+                    playSound(); //not actually implemented yet
+                }
+            } //sub frame timing isn't preserved when pausing, fix later maybe?
             timer_accumulator -= 1000 / 60; //remove 16.67ms from accumulator since timers have been decremented for that time period
-        }
+    }
 
         // 4. Render display
         drawDisplay(renderer);
